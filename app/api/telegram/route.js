@@ -1,11 +1,16 @@
 import OpenAI from "openai";
 import {NORTH_STAR,TINKERBELL_SYSTEM} from "../../../lib/northstar";
 
-async function sendTelegram(chatId,text){
+function telegramApi(method){
   const token=process.env.TELEGRAM_BOT_TOKEN;
   if(!token) throw new Error("TELEGRAM_BOT_TOKEN missing");
-  const res=await fetch(`https://api.telegram.org/bot${token}/sendMessage`,{
-    method:"POST",headers:{"content-type":"application/json"},
+  return `https://api.telegram.org/bot${token}/${method}`;
+}
+
+async function sendTelegram(chatId,text){
+  const res=await fetch(telegramApi("sendMessage"),{
+    method:"POST",
+    headers:{"content-type":"application/json"},
     body:JSON.stringify({chat_id:chatId,text})
   });
   if(!res.ok) throw new Error(`Telegram send failed: ${res.status}`);
@@ -17,6 +22,32 @@ function commandPrompt(text){
   if(text==="/leads") return "오늘 해외 신규 리드 발굴과 기존 미응답 리드 팔로업을 어떤 순서로 실행할지 계획해줘.";
   if(text.startsWith("/country ")) return `${text.replace("/country ","")} 시장 공략을 위한 고객 세그먼트, 채널, 오퍼, 메시지, 7일 실행계획을 만들어줘.`;
   return text;
+}
+
+export async function GET(req){
+  try{
+    const origin=new URL(req.url).origin;
+    const webhookUrl=`${origin}/api/telegram`;
+    const payload={url:webhookUrl,allowed_updates:["message"]};
+    if(process.env.TELEGRAM_WEBHOOK_SECRET) payload.secret_token=process.env.TELEGRAM_WEBHOOK_SECRET;
+
+    const res=await fetch(telegramApi("setWebhook"),{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify(payload)
+    });
+    const data=await res.json();
+    if(!res.ok||!data.ok) return Response.json({ok:false,step:"setWebhook",telegram:data},{status:500});
+
+    return Response.json({
+      ok:true,
+      message:"Tinkerbell Telegram webhook connected",
+      webhook_url:webhookUrl
+    });
+  }catch(error){
+    console.error(error);
+    return Response.json({ok:false,error:"telegram_webhook_setup_failed"},{status:500});
+  }
 }
 
 export async function POST(req){
