@@ -7,6 +7,27 @@ function telegramApi(method){
   return `https://api.telegram.org/bot${token}/${method}`;
 }
 
+function normalizeOrigin(value){
+  if(!value) return null;
+  return value.startsWith("http://")||value.startsWith("https://") ? value.replace(/\/$/,"") : `https://${value.replace(/\/$/,"")}`;
+}
+
+function getPublicOrigin(req){
+  const vercelProduction=normalizeOrigin(process.env.VERCEL_PROJECT_PRODUCTION_URL);
+  if(vercelProduction) return {origin:vercelProduction,source:"VERCEL_PROJECT_PRODUCTION_URL"};
+
+  const vercelUrl=normalizeOrigin(process.env.VERCEL_URL);
+  if(vercelUrl) return {origin:vercelUrl,source:"VERCEL_URL"};
+
+  const forwardedHost=req.headers.get("x-forwarded-host")||req.headers.get("host");
+  if(forwardedHost){
+    const proto=req.headers.get("x-forwarded-proto")||"https";
+    return {origin:`${proto}://${forwardedHost}`,source:"request_headers"};
+  }
+
+  return {origin:new URL(req.url).origin,source:"request_url"};
+}
+
 async function sendTelegram(chatId,text){
   const res=await fetch(telegramApi("sendMessage"),{
     method:"POST",
@@ -26,8 +47,24 @@ function commandPrompt(text){
 
 export async function GET(req){
   try{
-    const origin=new URL(req.url).origin;
+    const {origin,source}=getPublicOrigin(req);
     const webhookUrl=`${origin}/api/telegram`;
+
+    const url=new URL(req.url);
+    if(url.searchParams.get("mode")==="status"){
+      const infoRes=await fetch(telegramApi("getWebhookInfo"));
+      const info=await infoRes.json();
+      return Response.json({
+        ok:Boolean(info?.ok),
+        public_origin:origin,
+        address_source:source,
+        expected_webhook_url:webhookUrl,
+        telegram_webhook_url:info?.result?.url||null,
+        pending_update_count:info?.result?.pending_update_count??null,
+        last_error_message:info?.result?.last_error_message||null
+      });
+    }
+
     const payload={url:webhookUrl,allowed_updates:["message"]};
     if(process.env.TELEGRAM_WEBHOOK_SECRET) payload.secret_token=process.env.TELEGRAM_WEBHOOK_SECRET;
 
@@ -42,6 +79,8 @@ export async function GET(req){
     return Response.json({
       ok:true,
       message:"Tinkerbell Telegram webhook connected",
+      public_origin:origin,
+      address_source:source,
       webhook_url:webhookUrl
     });
   }catch(error){
